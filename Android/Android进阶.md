@@ -358,3 +358,52 @@ dimens使用：
 
 
 
+# 27.讲讲 Android 的事件分发机制
+
+![事件分发图](https://p1-jj.byteimg.com/tos-cn-i-t2oaga2asx/gold-user-assets/2020/5/21/17237beb2491d7e5~tplv-t2oaga2asx-watermark.awebp)
+
+
+
+判断是否需要拦截 —> 主要是根据 onInterceptTouchEvent 方法的返回值来决定是否拦截；
+
+在 DOWN 事件中将 touch 事件分发给子 View —> 这一过程如果有子 View 捕获消费了 touch 事件，会对 mFirstTouchTarget 进行赋值；
+
+最后一步，DOWN、MOVE、UP 事件都会根据 mFirstTouchTarget 是否为 null，决定是自己处理 touch 事件，还是再次分发给子 View。
+
+DOWN 事件是事件序列的起点；决定后续事件由谁来消费处理；
+
+mFirstTouchTarget 的作用：记录捕获消费 touch 事件的 View，是一个链表结构；
+
+CANCEL 事件的触发场景：当父视图先不拦截，然后在 MOVE 事件中重新拦截，此时子 View 会接收到一个 CANCEL 事件。
+
+如果一个事件最后所有的 View 都不处理的话，最终回到 Activity 的 onTouchEvent 方法里面来。
+
+
+
+# 28.Android子线程中能不能更新UI？
+
+at android.view.ViewRootImpl.checkThread(ViewRootImpl.java:7752 
+
+在ViewRootImpl中，有一个方法 void checkThread() {
+
+​        if (mThread != Thread.currentThread()) {
+
+​            throw new CalledFromWrongThreadException(
+
+​                    "Only the original thread that created a view hierarchy can touch its views.");
+
+​        }
+
+​    }
+
+在此会有个检查线程的判断，只有创建视图原始线程才能接触其视图。并不是说，只有UI线程才能接触这个视图。你ViewRootImpl在哪个线程创建的，你后续的UI更新就需要在哪个线程执行，跟是不是UI线程毫无关系。
+
+在这个前提之前，对于上述问题，有以下理解：
+
+(1)因为ViewRootImp实例化是在onResume以后,所以在Activity的onResume之前，使用子线程更新UI，不会导致应用崩溃。
+
+（2）如果在子线程调用dialog.show，是可以在dialog中正常的更新UI的，因为dialog调用show方法后，其ViewRootImpl是在子线程中创建的。如果此时更新UI，切换到UI线程会导致应用崩溃。
+
+
+
+通过打印ViewParent的体系，会发现最底部是ViewRootImpl，所以当view触发了requesLayout的时候，会调用checkThread。
