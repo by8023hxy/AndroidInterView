@@ -44,6 +44,20 @@ ConnectionPool：
 - networkInterceptors：用户定义网络拦截器。
 - CallServerInterceptor：负责向服务器发送请求数据、从服务器读取响应数据。
 
+#### **异步请求流程**
+
+异步请求
+
+1.一开始会去执行dispatcher.enqueue()，里面会有两个判断，判断运行任务列队runningAsyncCalls中的任务总数是否超过64个以及网络请求的host是否超过5个，如果没超过这两个数，那么往运行任务队列中添加任务，然后把任务交给线程池去执行。如果超过了，则直接放到准备等待任务队列中readyAsyncCalls中去等待。
+
+2.之后执行一次拦截器链getResponseIntecepterChain()把结果返回返回
+
+3.在进行一次判断，这个任务是否需要重新连接，是否被取消retryAndFollowUpInterceptor.isCanceled()，如果取消了则证明这个任务执行失败了，则在线程中回调onFailure()方法，如果成功则回调onResponse()方法。
+
+4.最后调用dispatcher.finish(this)方法，里面有一个promoteCalls()方法，用来调整队列中的任务。通过把刚才准备队列中(readyAsyncCalls)中的任务再次添加到异步运行任务队列中去，然后交给线程池去执行。
+
+这就是一次异步请求的流程。
+
 # 2.Retrofit
 
 ##### 这个库是做什么用的？
@@ -282,7 +296,7 @@ RxJava的扩展观察者模式中就是存在这么4种角色：
 | 事件（Event）          | 被观察者和观察者的消息载体 |
 | 订阅（Subscribe）      | 连接被观察者和观察者       |
 
-**2.2****RxJava事件类型**
+**2.2**RxJava事件类型
 
 RxJava中的事件分为三种类型：Next事件、Complete事件和Error事件。具体如下：
 
@@ -292,7 +306,7 @@ RxJava中的事件分为三种类型：Next事件、Complete事件和Error事件
 | Complete | 结束事件 | 被观察者发送Complete事件后可以继续发送事件，观察者收到Complete事件后将不会接受其他任何事件 |
 | Error    | 异常事件 | 被观察者发送Error事件后，其他事件将被终止发送，观察者收到Error事件后将不会接受其他任何事件 |
 
-**3.****RxJava的消息订阅**
+**3.**RxJava的消息订阅
 
 1.创建被观察者(Observable),定义要发送的事件。
 
@@ -300,7 +314,7 @@ RxJava中的事件分为三种类型：Next事件、Complete事件和Error事件
 
 3.观察者通过订阅（subscribe）被观察者把它们连接到一起。
 
-**4.****创建被观察者过程**
+**4.**创建被观察者过程
 
 ![image-20211205105058501](/Users/baiyu/Library/Application Support/typora-user-images/image-20211205105058501.png)
 
@@ -331,3 +345,37 @@ Observable(被观察者)和Observer(观察者)建立连接(订阅)之后，会�
 **6.rxjava背压策略实现原理是怎样的？**
 
 当上下游在不同的线程中，通过Observable发射，处理，响应数据流时，如果上游发射数据的速度快于下游接收处理数据的速度，这样对于那些没来及处理的数据就会造成积压，这些数据既不会丢失，也不会被垃圾回收机制回收，而是存放在一个异步缓存池中，如果缓存池中的数据一直得不到处理，越积越多，最后就会造成内存溢出，这便是响应式编程中的背压（backpressure）问题。
+
+
+
+# 5.**LeakCanary原理解析**
+
+#### 基本原理
+
+主要是在Activity的&**onDestroy**方法中，手动调用 GC，然后利用ReferenceQueue+WeakReference，来判断是否有释放不掉的引用，然后结合dump memory的hpof文件, 用[HaHa](https://github.com/square/haha)分析出泄漏地方。
+
+#### **知识点**
+
+1.用ActivityLifecycleCallbacks接口来检测Activity生命周期
+
+2.WeakReference + ReferenceQueue 来监听对象回收情况 
+
+3.Application中可通过processName判断是否是任务执行进程 
+
+4.MessageQueue中加入一个IdleHandler来得到主线程空闲回调 
+
+5.LeakCanary检测只针对Activiy里的相关对象。其他类无法使用，还得用MAT原始方法
+
+6.LeakCanary 会使用 Square 开源库 [haha](https://github.com/square/haha) 来分析Android heap dump文件，并把最终结果通过通知的方式显示在通知栏。
+
+#### 实例
+
+单Activity的架构中， 使用Navigation切换fragment 每次都会触发onDestroyView，那么如果在这个Fragment中使用了RecyclerView会导致内存泄露，在onDestroyView中将adapter置空，可以释放recyclerview，解决内存泄露。
+
+
+
+# 6.**BlockCanary**原理
+
+答：blockcanary的核心原理是通过自定义一个Printer，设置到主线程ActivityThread的MainLooper中。MainLooper在dispatch消息前后都会调用Printer进行打印。从而获取前后执行的时间差值，判断是否超过设置的阈值。如果超过，则会将记录的栈信息及cpu信息发通知到前台。
+
+blockcanary充分的利用了Loop的机制，在MainLooper的loop方法中执行dispatchMessage前后都会执行printer的println进行输出，并且提供了方法设置printer。通过分析前后打印的时差与阈值进行比对，从而判定是否卡顿。
